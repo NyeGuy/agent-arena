@@ -28,6 +28,7 @@ No reward shaping. No second opponent. No per-game PPO update (see surprises).
 - **Max still has a real last-policy strip**, but it is a *sample* of decisions (end of each game), not a continuous movie. The caption and the speed labels say so. Flooding the page thread with every ply at Max would violate “UI 60fps”; the UI coalesces worker messages to one paint per frame and keeps every win-rate point.
 - **Entropy is secondary, not hidden.** The thesis is plain language first: “guess spread — high = smear, low = spike.” The number is still the PPO entropy. Eval (“best-column check”) stays every 200 games; it is a measurement, not training, and the status line names it when it runs so it is not an invisible hitch.
 - **Seating is still random each game.** The seat badge is required for the board to be readable. That is chrome in service of the window, not a roster.
+- **Reset raced the worker.** First browser pass: Reset cleared the board but a leftover progress frame (and the rAF flush) redrew the old win-rate line. The record is the curriculum — a ghost of the last run is a lie. Each run now has an id; stale frames are dropped.
 
 ## Scope additions we are willing to defend
 
