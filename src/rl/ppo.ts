@@ -1,7 +1,7 @@
 import * as tf from "@tensorflow/tfjs";
 import { COLS, OBS_SIZE } from "../engine/connect4";
 import { createActorCritic, predictLogitsValue, type ActorCritic } from "./network";
-import { argmaxMasked, entropyMasked, logProbMasked, sampleMasked } from "./mask";
+import { argmaxMasked, entropyMasked, logProbMasked, sampleMasked, softmaxProbs } from "./mask";
 
 export interface PpoHyperparams {
   hiddenSize: number;
@@ -37,6 +37,8 @@ export interface ActResult {
   logp: number;
   value: number;
   entropy: number;
+  /** Masked softmax over the seven columns — same distribution `action` was drawn from. */
+  probs: number[];
 }
 
 export class PpoAgent {
@@ -61,8 +63,9 @@ export class PpoAgent {
     const action = greedy ? argmaxMasked(logits, mask) : sampleMasked(logits, mask, rng);
     const logp = logProbMasked(logits, mask, action);
     const entropy = entropyMasked(logits, mask);
+    const probs = softmaxProbs(logits, mask);
     this.lastEntropy = entropy;
-    return { action, logp, value, entropy };
+    return { action, logp, value, entropy, probs };
   }
 
   update(batch: RolloutBatch): { loss: number; entropy: number } {

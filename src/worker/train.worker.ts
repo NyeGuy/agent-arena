@@ -1,8 +1,10 @@
-import { runTraining } from "../train/loop";
-import type { MainToWorker, WorkerToMain } from "./protocol";
+import type { TrainSpeed } from "./protocol";
+import { DEFAULT_SPEED, SPEED_DELAY_MS, type MainToWorker, type WorkerToMain } from "./protocol";
 
 let running = false;
+let paused = false;
 let generation = 0;
+let speed: TrainSpeed = DEFAULT_SPEED;
 
 function post(message: WorkerToMain): void {
   self.postMessage(message);
@@ -14,22 +16,37 @@ function yieldToEventLoop(): Promise<void> {
   });
 }
 
-async function start(seed: number): Promise<void> {
+async function start(seed: number, nextSpeed: TrainSpeed): Promise<void> {
   const myGen = ++generation;
   running = true;
+  paused = false;
+  speed = nextSpeed;
+
   try {
+    const { runTraining } = await import("../train/loop");
+    if (generation !== myGen) {
+      return;
+    }
     await runTraining(
       { seed },
       {
         shouldContinue: () => running && generation === myGen,
+        isPaused: () => paused,
+        moveDelayMs: () => SPEED_DELAY_MS[speed],
+        emitLive: () => speed !== "max",
         onProgress: (progress) => {
           if (running && generation === myGen) {
             post({ type: "progress", progress });
           }
         },
-        onSnapshot: (snapshot) => {
+        onLiveFrame: (frame) => {
           if (running && generation === myGen) {
-            post({ type: "snapshot", snapshot });
+            post({ type: "frame", frame });
+          }
+        },
+        onPhase: (phase) => {
+          if (running && generation === myGen) {
+            post({ type: "phase", phase });
           }
         },
         yieldFn: yieldToEventLoop,
@@ -41,6 +58,7 @@ async function start(seed: number): Promise<void> {
   } finally {
     if (generation === myGen) {
       running = false;
+      paused = false;
       post({ type: "stopped" });
     }
   }
@@ -50,9 +68,21 @@ self.onmessage = (event: MessageEvent<MainToWorker>) => {
   const data = event.data;
   if (data.type === "start") {
     running = false;
-    void start(data.seed ?? 42);
-  } else if (data.type === "stop") {
+    paused = false;
+    void start(data.seed ?? 42, data.speed ?? DEFAULT_SPEED);
+  } else if (data.type === "pause") {
+    if (running) {
+      paused = true;
+      post({ type: "paused" });
+    }
+  } else if (data.type === "resume") {
+    paused = false;
+  } else if (data.type === "reset") {
     running = false;
+    paused = false;
+    generation += 1;
+  } else if (data.type === "setSpeed") {
+    speed = data.speed;
   }
 };
 
