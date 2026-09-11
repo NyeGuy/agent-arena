@@ -12,17 +12,17 @@ export const SPEED_DELAY_MS: Record<TrainSpeed, number> = {
 export const DEFAULT_SPEED: TrainSpeed = "watch";
 
 export type MainToWorker =
-  | { type: "start"; seed?: number; speed?: TrainSpeed }
+  | { type: "start"; seed?: number; speed?: TrainSpeed; runId: number }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "reset" }
   | { type: "setSpeed"; speed: TrainSpeed };
 
 export type WorkerToMain =
-  | { type: "progress"; progress: TrainProgress }
-  | { type: "frame"; frame: LiveFrame }
-  | { type: "phase"; phase: TrainPhase }
+  | { type: "progress"; runId: number; progress: TrainProgress }
+  | { type: "frame"; runId: number; frame: LiveFrame }
+  | { type: "phase"; runId: number; phase: TrainPhase }
   | { type: "ready" }
-  | { type: "paused" }
-  | { type: "stopped" }
-  | { type: "error"; message: string };
+  | { type: "paused"; runId: number }
+  | { type: "stopped"; runId: number }
+  | { type: "error"; runId?: number; message: string };

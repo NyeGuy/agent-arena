@@ -23,7 +23,10 @@ export function useTraining() {
   const [history, setHistory] = useState<WinRatePoint[]>([]);
   const [speed, setSpeedState] = useState<TrainSpeed>(DEFAULT_SPEED);
   const statusRef = useRef<RunStatus>("loading");
+  const runIdRef = useRef(0);
   statusRef.current = status;
+
+  const isLive = (runId?: number): boolean => runId === runIdRef.current && runIdRef.current > 0;
 
   const flush = useCallback(() => {
     rafRef.current = 0;
@@ -71,6 +74,9 @@ export function useTraining() {
         setReady(true);
         setStatus((s) => (s === "loading" ? "idle" : s));
       } else if (msg.type === "progress") {
+        if (!isLive(msg.runId)) {
+          return;
+        }
         pendingProgress.current = msg.progress;
         if (msg.progress.rollingWinRate !== null && msg.progress.games > 0) {
           pendingHistory.current = appendPoint(pendingHistory.current, {
@@ -80,18 +86,30 @@ export function useTraining() {
         }
         schedule();
       } else if (msg.type === "frame") {
+        if (!isLive(msg.runId)) {
+          return;
+        }
         pendingFrame.current = msg.frame;
         schedule();
       } else if (msg.type === "phase") {
+        if (!isLive(msg.runId)) {
+          return;
+        }
         pendingPhase.current = msg.phase;
         schedule();
       } else if (msg.type === "paused") {
-        setStatus("paused");
+        if (isLive(msg.runId)) {
+          setStatus("paused");
+        }
       } else if (msg.type === "stopped") {
-        setStatus("idle");
+        if (isLive(msg.runId)) {
+          setStatus("idle");
+        }
       } else if (msg.type === "error") {
-        setError(msg.message);
-        setStatus("idle");
+        if (msg.runId === undefined || isLive(msg.runId)) {
+          setError(msg.message);
+          setStatus("idle");
+        }
       }
     };
     worker.onerror = (event) => {
@@ -112,6 +130,10 @@ export function useTraining() {
     pendingFrame.current = null;
     pendingPhase.current = null;
     pendingHistory.current = [];
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    }
     setProgress(null);
     setFrame(null);
     setHistory([]);
@@ -120,9 +142,15 @@ export function useTraining() {
   }, []);
 
   const start = useCallback(() => {
+    runIdRef.current += 1;
     clearBoard();
     setStatus("running");
-    workerRef.current?.postMessage({ type: "start", seed: DEFAULT_SEED, speed });
+    workerRef.current?.postMessage({
+      type: "start",
+      seed: DEFAULT_SEED,
+      speed,
+      runId: runIdRef.current,
+    });
   }, [clearBoard, speed]);
 
   const pause = useCallback(() => {
@@ -142,6 +170,7 @@ export function useTraining() {
   }, []);
 
   const reset = useCallback(() => {
+    runIdRef.current += 1;
     workerRef.current?.postMessage({ type: "reset" });
     clearBoard();
     setStatus(ready ? "idle" : "loading");
