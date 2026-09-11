@@ -3,7 +3,13 @@ import { mulberry32, pick } from "../engine/rng";
 import { computeGAE, normalize } from "../rl/gae";
 import { PpoAgent } from "../rl/ppo";
 import { ensureTfCpu } from "../rl/network";
-import { type BoardSnapshot, type TrainProgress, rollingRate } from "./progress";
+import { waitForTurn, type PaceHooks } from "./pacing";
+import {
+  type LiveFrame,
+  type TrainPhase,
+  type TrainProgress,
+  rollingRate,
+} from "./progress";
 
 export interface TrainConfig {
   seed: number;
@@ -30,7 +36,7 @@ export const DEFAULT_TRAIN: TrainConfig = {
   gaeLambda: 0.95,
   gamesPerUpdate: 32,
   maxGames: Number.POSITIVE_INFINITY,
-  progressEvery: 8,
+  progressEvery: 1,
   evalEvery: 200,
   evalGames: 40,
   rollingWindow: 100,
@@ -43,10 +49,11 @@ export const DEFAULT_TRAIN: TrainConfig = {
   minibatchSize: 256,
 };
 
-export interface TrainHooks {
-  shouldContinue: () => boolean;
+export interface TrainHooks extends PaceHooks {
   onProgress: (progress: TrainProgress) => void;
-  onSnapshot?: (snapshot: BoardSnapshot) => void;
+  onLiveFrame?: (frame: LiveFrame) => void;
+  onPhase?: (phase: TrainPhase) => void;
+  emitLive?: () => boolean;
   yieldFn?: () => Promise<void>;
 }
 
@@ -87,6 +94,7 @@ export async function runTraining(
   let lastLoss: number | null = null;
   let lastEntropy: number | null = null;
   let lastEval: number | null = null;
+  let phase: TrainPhase = "playing";
   const started = nowMs();
 
   const emit = (evalWinRate: number | null = lastEval): void => {
@@ -104,7 +112,13 @@ export async function runTraining(
       evalGames: cfg.evalGames,
       elapsedMs: nowMs() - started,
       algorithm: "ppo",
+      phase,
     });
+  };
+
+  const setPhase = (next: TrainPhase): void => {
+    phase = next;
+    hooks.onPhase?.(next);
   };
 
   try {
@@ -112,9 +126,13 @@ export async function runTraining(
 
     while (hooks.shouldContinue() && games < cfg.maxGames) {
       const batch: Transition[] = [];
+      setPhase("playing");
 
       for (let g = 0; g < cfg.gamesPerUpdate && hooks.shouldContinue() && games < cfg.maxGames; g++) {
-        const episode = playEpisode(env, agent, rng, false);
+        const episode = await playEpisode(env, agent, rng, false, hooks, games + 1);
+        if (!episode) {
+          break;
+        }
         applyTerminalRewards(episode.steps, episode.result);
         batch.push(...episode.steps);
         games += 1;
@@ -130,21 +148,34 @@ export async function runTraining(
           recent.splice(0, recent.length - cfg.rollingWindow);
         }
         if (games % cfg.progressEvery === 0) {
-          hooks.onSnapshot?.({
-            cells: Array.from(env.cells),
-            lastMove: env.lastMove,
-            winner: env.winner,
-            agentPlayer: episode.agentPlayer,
-          });
+          if (!hooks.emitLive?.()) {
+            hooks.onLiveFrame?.(
+              makeFrame(env, {
+                agentPlayer: episode.agentPlayer,
+                gameIndex: games,
+                policy: episode.lastPolicy,
+                chosenColumn: episode.lastAction,
+                actor: "none",
+                pending: false,
+              }),
+            );
+          }
           emit();
         }
         if (cfg.evalEvery > 0 && games % cfg.evalEvery === 0) {
-          lastEval = evaluate(agent, rng, cfg.evalGames);
+          setPhase("evaluating");
+          lastEval = await evaluate(agent, rng, cfg.evalGames, hooks);
+          setPhase("playing");
           emit(lastEval);
+        }
+        if (hooks.yieldFn && !hooks.emitLive?.()) {
+          await hooks.yieldFn();
         }
       }
 
-      if (batch.length > 0) {
+      if (batch.length > 0 && hooks.shouldContinue()) {
+        setPhase("updating");
+        emit();
         const rewards = batch.map((t) => t.reward);
         const values = batch.map((t) => t.value);
         const dones = batch.map((t) => t.done);
@@ -165,6 +196,8 @@ export async function runTraining(
         });
         lastLoss = stats.loss;
         lastEntropy = stats.entropy;
+        setPhase("playing");
+        emit();
       }
 
       if (hooks.yieldFn) {
@@ -178,22 +211,85 @@ export async function runTraining(
   }
 }
 
-function playEpisode(
+interface EpisodeResult {
+  steps: Transition[];
+  result: number;
+  agentPlayer: Player;
+  lastPolicy: number[] | null;
+  lastAction: number | null;
+}
+
+async function playEpisode(
   env: Connect4,
   agent: PpoAgent,
   rng: () => number,
   greedy: boolean,
-): { steps: Transition[]; result: number; agentPlayer: Player } {
+  hooks?: TrainHooks,
+  gameIndex = 0,
+): Promise<EpisodeResult | null> {
+  const live = Boolean(hooks?.emitLive?.() && hooks.onLiveFrame && !greedy);
   const agentPlayer: Player = rng() < 0.5 ? 1 : 2;
   env.reset(1);
   const steps: Transition[] = [];
+  let lastPolicy: number[] | null = null;
+  let lastAction: number | null = null;
+
+  if (live) {
+    hooks!.onLiveFrame!(
+      makeFrame(env, {
+        agentPlayer,
+        gameIndex,
+        policy: null,
+        chosenColumn: null,
+        actor: "none",
+        pending: false,
+      }),
+    );
+  }
 
   while (env.outcome === "ongoing") {
+    if (hooks) {
+      await waitForTurn(hooks);
+    }
+    if (hooks && !hooks.shouldContinue()) {
+      return null;
+    }
+
     const mask = env.legalMask();
     if (env.currentPlayer === agentPlayer) {
       const obs = env.encode(agentPlayer);
       const decision = agent.act(obs, mask, rng, greedy);
+      lastPolicy = decision.probs;
+      lastAction = decision.action;
+      if (live) {
+        hooks!.onLiveFrame!(
+          makeFrame(env, {
+            agentPlayer,
+            gameIndex,
+            policy: decision.probs,
+            chosenColumn: decision.action,
+            actor: "agent",
+            pending: true,
+          }),
+        );
+        await waitForTurn(hooks!);
+        if (!hooks!.shouldContinue()) {
+          return null;
+        }
+      }
       env.drop(decision.action);
+      if (live) {
+        hooks!.onLiveFrame!(
+          makeFrame(env, {
+            agentPlayer,
+            gameIndex,
+            policy: decision.probs,
+            chosenColumn: decision.action,
+            actor: "agent",
+            pending: false,
+          }),
+        );
+      }
       steps.push({
         obs,
         action: decision.action,
@@ -204,7 +300,20 @@ function playEpisode(
         mask,
       });
     } else {
-      env.drop(pick(rng, env.legalMoves()));
+      const col = pick(rng, env.legalMoves());
+      env.drop(col);
+      if (live) {
+        hooks!.onLiveFrame!(
+          makeFrame(env, {
+            agentPlayer,
+            gameIndex,
+            policy: lastPolicy,
+            chosenColumn: lastAction,
+            actor: "random",
+            pending: false,
+          }),
+        );
+      }
     }
   }
 
@@ -212,7 +321,7 @@ function playEpisode(
   if (env.outcome === "win") {
     result = env.winner === agentPlayer ? 1 : -1;
   }
-  return { steps, result, agentPlayer };
+  return { steps, result, agentPlayer, lastPolicy, lastAction };
 }
 
 function applyTerminalRewards(steps: Transition[], result: number): void {
@@ -224,16 +333,62 @@ function applyTerminalRewards(steps: Transition[], result: number): void {
   last.done = 1;
 }
 
-function evaluate(agent: PpoAgent, rng: () => number, games: number): number {
+async function evaluate(
+  agent: PpoAgent,
+  rng: () => number,
+  games: number,
+  hooks: TrainHooks,
+): Promise<number> {
   const env = new Connect4();
   let wins = 0;
+  let played = 0;
   for (let i = 0; i < games; i++) {
-    const { result } = playEpisode(env, agent, rng, true);
-    if (result === 1) {
+    if (!hooks.shouldContinue()) {
+      break;
+    }
+    while (hooks.isPaused?.() && hooks.shouldContinue()) {
+      await waitForTurn(hooks);
+    }
+    const episode = await playEpisode(env, agent, rng, true);
+    if (!episode) {
+      break;
+    }
+    played += 1;
+    if (episode.result === 1) {
       wins += 1;
     }
+    if (hooks.yieldFn && i % 5 === 0) {
+      await hooks.yieldFn();
+    }
   }
-  return wins / games;
+  return played === 0 ? 0 : wins / played;
+}
+
+function makeFrame(
+  env: Connect4,
+  extra: {
+    agentPlayer: Player;
+    gameIndex: number;
+    policy: number[] | null;
+    chosenColumn: number | null;
+    actor: LiveFrame["actor"];
+    pending: boolean;
+  },
+): LiveFrame {
+  return {
+    cells: Array.from(env.cells),
+    lastMove: env.lastMove,
+    winner: env.winner,
+    outcome: env.outcome,
+    agentPlayer: extra.agentPlayer,
+    currentPlayer: env.currentPlayer,
+    gameIndex: extra.gameIndex,
+    moveCount: env.moveCount,
+    policy: extra.policy,
+    chosenColumn: extra.chosenColumn,
+    actor: extra.actor,
+    pending: extra.pending,
+  };
 }
 
 function nowMs(): number {

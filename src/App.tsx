@@ -1,149 +1,196 @@
-import { useEffect, useRef, useState } from "react";
-import { COLS, ROWS } from "./engine/connect4";
-import type { BoardSnapshot, TrainProgress } from "./train/progress";
-import type { WorkerToMain } from "./worker/protocol";
+import { useEffect } from "react";
+import { Board } from "./ui/Board";
+import { Controls } from "./ui/Controls";
+import { HeatStrip } from "./ui/HeatStrip";
+import { useTraining } from "./ui/useTraining";
+import { WinRateChart } from "./ui/WinRateChart";
 import "./App.css";
 
-const DEFAULT_SEED = 42;
-
 export function App() {
-  const workerRef = useRef<Worker | null>(null);
-  const [ready, setReady] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<TrainProgress | null>(null);
-  const [snapshot, setSnapshot] = useState<BoardSnapshot | null>(null);
+  const train = useTraining();
 
   useEffect(() => {
-    const worker = new Worker(new URL("./worker/train.worker.ts", import.meta.url), {
-      type: "module",
-    });
-    workerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
-      const msg = event.data;
-      if (msg.type === "ready") {
-        setReady(true);
-      } else if (msg.type === "progress") {
-        setProgress(msg.progress);
-      } else if (msg.type === "snapshot") {
-        setSnapshot(msg.snapshot);
-      } else if (msg.type === "stopped") {
-        setRunning(false);
-      } else if (msg.type === "error") {
-        setError(msg.message);
-        setRunning(false);
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) {
+        return;
+      }
+      if (event.code === "Space") {
+        event.preventDefault();
+        if (train.status === "running") {
+          train.pause();
+        } else if (train.status === "paused") {
+          train.resume();
+        } else if (train.status === "idle" && train.ready) {
+          train.start();
+        }
+      } else if (event.key === "Enter" && train.status === "idle" && train.ready) {
+        event.preventDefault();
+        train.start();
+      } else if (event.key === "1") {
+        train.setSpeed("watch");
+      } else if (event.key === "2") {
+        train.setSpeed("fast");
+      } else if (event.key === "3") {
+        train.setSpeed("max");
       }
     };
-    worker.onerror = (event) => {
-      setError(event.message || "Worker failed");
-      setRunning(false);
-    };
-    return () => {
-      worker.terminate();
-      workerRef.current = null;
-    };
-  }, []);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [train]);
 
-  const start = () => {
-    setError(null);
-    setProgress(null);
-    setSnapshot(null);
-    setRunning(true);
-    workerRef.current?.postMessage({ type: "start", seed: DEFAULT_SEED });
-  };
-
-  const stop = () => {
-    workerRef.current?.postMessage({ type: "stop" });
-  };
+  const windowSize = train.progress?.rollingWindow ?? 100;
+  const heatCaption = heatCaptionFor(train.frame?.policy ?? null, train.frame?.pending ?? false);
 
   return (
     <main className="page">
-      <p className="eyebrow">Phase 0 spike · window into RL</p>
-      <h1>Agent Arena</h1>
-      <p className="lede">
-        In-browser PPO on Connect Four, trained against a Random opponent. Training
-        runs in a Web Worker so the page stays responsive.
-      </p>
-
-      <section className="panel controls">
-        <button className="primary" type="button" onClick={start} disabled={!ready || running}>
-          Start
-        </button>
-        <button type="button" onClick={stop} disabled={!running}>
-          Stop
-        </button>
-        <span className="status">
-          {!ready ? "Loading TensorFlow.js worker…" : running ? "Training" : "Idle"}
-          {" · seed "}
-          {DEFAULT_SEED}
-          {" · PPO vs Random"}
-        </span>
-      </section>
-
-      {error ? <p className="error">{error}</p> : null}
-
-      <section className="panel metrics" aria-live="polite">
-        <Metric label="Games" value={fmtInt(progress?.games)} />
-        <Metric
-          label={`Win rate / ${progress?.rollingWindow ?? 100}`}
-          value={fmtPct(progress?.rollingWinRate)}
-          good={(progress?.rollingWinRate ?? 0) >= 0.6}
-        />
-        <Metric label="Wins / losses / draws" value={recordLine(progress)} />
-        <Metric label="Entropy" value={fmtNum(progress?.entropy)} />
-        <Metric label="Eval win rate" value={fmtPct(progress?.evalWinRate)} />
-        <Metric label="Elapsed" value={fmtTime(progress?.elapsedMs)} />
-      </section>
-
-      <section className="panel board-wrap">
-        <Board snapshot={snapshot} />
-        <p className="caption">
-          Last finished game. Red is player 1, yellow is player 2. The agent is
-          randomly seated as either color each game. Rolling win rate is the
-          exploring train policy; eval is greedy vs Random.
+      <header className="hero">
+        <p className="eyebrow">Phase 1 · Arena slice</p>
+        <h1>Agent Arena</h1>
+        <p className="lede">
+          Watch a machine learn Connect Four. The heat under each column is the
+          agent&apos;s real guess — not a decoration.
         </p>
+      </header>
+
+      <Controls
+        ready={train.ready}
+        status={train.status}
+        speed={train.speed}
+        onTrain={train.start}
+        onPause={train.pause}
+        onResume={train.resume}
+        onReset={train.reset}
+        onSpeed={train.setSpeed}
+      />
+
+      <p className="status-line" aria-live="polite">
+        {statusLine(train)}
+      </p>
+      {train.error ? <p className="error">{train.error}</p> : null}
+
+      <section className="panel stage" aria-label="Live game">
+        <div className="stage-head">
+          <Seat frame={train.frame} />
+          <p className="opponent">Opponent: Random — any open column, equally likely.</p>
+        </div>
+        <Board frame={train.frame} />
+        <HeatStrip frame={train.frame} />
+        <p className="caption">{heatCaption}</p>
+      </section>
+
+      <section className="panel record" aria-label="Learning record">
+        <h2>Win rate vs Random</h2>
+        <p className="sub">
+          Share of the last {windowSize} games the learner won. Chance is about 50%.
+          This is the exploring train policy, not a hidden eval.
+        </p>
+        <WinRateChart history={train.history} window={windowSize} />
+        <div className="metrics">
+          <Metric label="Games" value={fmtInt(train.progress?.games)} />
+          <Metric
+            label={`Last ${windowSize} games`}
+            value={fmtPct(train.progress?.rollingWinRate)}
+            good={(train.progress?.rollingWinRate ?? 0) >= 0.6}
+          />
+          <Metric label="Wins / losses / draws" value={recordLine(train.progress)} />
+          <Metric
+            label="Guess spread"
+            value={fmtNum(train.progress?.entropy)}
+            hint="High = smear. Low = spike."
+          />
+          <Metric
+            label="Best-column check"
+            value={fmtPct(train.progress?.evalWinRate)}
+            hint="Greedy play vs Random, every 200 games."
+          />
+          <Metric label="Elapsed" value={fmtTime(train.progress?.elapsedMs)} />
+        </div>
       </section>
 
       <p className="note">
-        Spike only — no roster, customizer, tutor, or deploy. See PHASE0.md for the
-        measured win-rate trajectory and how to reproduce it.
+        Keyboard: space pause/resume, 1–3 speed. Arena slice only — one opponent
+        (Random). See PHASE1.md.
       </p>
     </main>
   );
+}
+
+function Seat({ frame }: { frame: ReturnType<typeof useTraining>["frame"] }) {
+  if (!frame) {
+    return <p className="seat">Learner seats as red or yellow at random each game.</p>;
+  }
+  const color = frame.agentPlayer === 1 ? "red" : "yellow";
+  const cls = frame.agentPlayer === 1 ? "swatch p1" : "swatch p2";
+  return (
+    <p className="seat">
+      <span className={cls} aria-hidden="true" />
+      Learner is <strong>{color}</strong> this game
+      {frame.outcome !== "ongoing" ? ` · ${endLine(frame)}` : ""}
+    </p>
+  );
+}
+
+function endLine(frame: NonNullable<ReturnType<typeof useTraining>["frame"]>): string {
+  if (frame.outcome === "draw") {
+    return "draw";
+  }
+  return frame.winner === frame.agentPlayer ? "learner won" : "Random won";
+}
+
+function heatCaptionFor(policy: number[] | null, pending: boolean): string {
+  if (!policy) {
+    return "Column heat appears on the learner's turn. Early training should look like a smear. Later, a spike.";
+  }
+  if (pending) {
+    return "These are the real probabilities. The outlined column is the sampled drop — not always the tallest bar.";
+  }
+  return "Taller = more likely. The guess stays put for 32 games, then jumps when the agent studies what happened.";
+}
+
+function statusLine(train: ReturnType<typeof useTraining>): string {
+  if (!train.ready) {
+    return "Loading the training worker…";
+  }
+  if (train.status === "idle") {
+    return `Ready · PPO vs Random · seed ${train.seed} · space to train`;
+  }
+  if (train.status === "paused") {
+    const n = train.frame?.gameIndex ?? train.progress?.games ?? "—";
+    return `Paused on game ${n} · space to resume`;
+  }
+  if (train.status === "running" && !train.progress) {
+    return "Waking TensorFlow.js…";
+  }
+  if (train.phase === "updating") {
+    return "Studying the last 32 games — this is when the guess changes.";
+  }
+  if (train.phase === "evaluating") {
+    return `Checking greedy play vs Random (${train.progress?.evalGames ?? 40} games).`;
+  }
+  if (train.frame) {
+    const color = train.frame.agentPlayer === 1 ? "red" : "yellow";
+    return `Game ${train.frame.gameIndex} · learner is ${color} · vs Random`;
+  }
+  return `Training · ${train.progress?.games ?? 0} games`;
 }
 
 function Metric({
   label,
   value,
   good = false,
+  hint,
 }: {
   label: string;
   value: string;
   good?: boolean;
+  hint?: string;
 }) {
   return (
     <div className="metric">
       <span className="label">{label}</span>
       <span className={`value${good ? " good" : ""}`}>{value}</span>
-    </div>
-  );
-}
-
-function Board({ snapshot }: { snapshot: BoardSnapshot | null }) {
-  const cells = snapshot?.cells ?? Array<number>(ROWS * COLS).fill(0);
-  const last = snapshot?.lastMove;
-  return (
-    <div className="board" role="img" aria-label="Connect Four board">
-      {Array.from({ length: ROWS * COLS }, (_, i) => {
-        const row = Math.floor(i / COLS);
-        const col = i % COLS;
-        const v = cells[i];
-        const isLast = last !== null && last !== undefined && last.row === row && last.col === col;
-        const cls = ["cell", v === 1 ? "p1" : "", v === 2 ? "p2" : "", isLast ? "last" : ""]
-          .filter(Boolean)
-          .join(" ");
-        return <div key={i} className={cls} />;
-      })}
+      {hint ? <span className="hint">{hint}</span> : null}
     </div>
   );
 }
@@ -176,7 +223,7 @@ function fmtTime(ms: number | undefined): string {
   return m > 0 ? `${m}m ${rem}s` : `${rem}s`;
 }
 
-function recordLine(progress: TrainProgress | null): string {
+function recordLine(progress: ReturnType<typeof useTraining>["progress"]): string {
   if (!progress) {
     return "—";
   }

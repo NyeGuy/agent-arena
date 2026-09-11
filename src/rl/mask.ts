@@ -31,6 +31,39 @@ export function logProbMasked(
   return logits[action] - max - Math.log(sumExp);
 }
 
+/** Masked softmax — the actual policy the agent samples from. Illegal columns are 0. */
+export function softmaxProbs(logits: ArrayLike<number>, mask: boolean[]): number[] {
+  const out = new Array<number>(mask.length).fill(0);
+  let max = -Infinity;
+  let legal = 0;
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) {
+      legal += 1;
+      if (logits[i] > max) {
+        max = logits[i];
+      }
+    }
+  }
+  if (legal === 0) {
+    return out;
+  }
+  let sumExp = 0;
+  const weights = new Array<number>(mask.length).fill(0);
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) {
+      const w = Math.exp(logits[i] - max);
+      weights[i] = w;
+      sumExp += w;
+    }
+  }
+  for (let i = 0; i < mask.length; i++) {
+    if (mask[i]) {
+      out[i] = weights[i] / sumExp;
+    }
+  }
+  return out;
+}
+
 export function entropyMasked(logits: ArrayLike<number>, mask: boolean[]): number {
   let max = -Infinity;
   let legal = 0;
