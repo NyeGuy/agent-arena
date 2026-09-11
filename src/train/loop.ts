@@ -129,14 +129,13 @@ export async function runTraining(
         if (recent.length > cfg.rollingWindow * 2) {
           recent.splice(0, recent.length - cfg.rollingWindow);
         }
-        hooks.onSnapshot?.({
-          cells: Array.from(env.cells),
-          lastMove: env.lastMove,
-          winner: env.winner,
-          agentPlayer: episode.agentPlayer,
-        });
-
         if (games % cfg.progressEvery === 0) {
+          hooks.onSnapshot?.({
+            cells: Array.from(env.cells),
+            lastMove: env.lastMove,
+            winner: env.winner,
+            agentPlayer: episode.agentPlayer,
+          });
           emit();
         }
         if (cfg.evalEvery > 0 && games % cfg.evalEvery === 0) {

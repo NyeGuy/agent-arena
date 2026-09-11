@@ -99,7 +99,8 @@ export function App() {
         <Board snapshot={snapshot} />
         <p className="caption">
           Last finished game. Red is player 1, yellow is player 2. The agent is
-          randomly seated as either color each game.
+          randomly seated as either color each game. Rolling win rate is the
+          exploring train policy; eval is greedy vs Random.
         </p>
       </section>
 

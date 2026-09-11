@@ -56,11 +56,6 @@ async function main(): Promise<void> {
   console.log(`- Draws: ${(rvr.draws / baselineGames * 100).toFixed(1)}%`);
   console.log(`- Random seated as either color (matches training seating): ${(seated * 100).toFixed(1)}%`);
   console.log("");
-  console.log(`## PPO vs Random (seed ${SEED}, maxGames ${MAX_GAMES})`);
-  console.log("");
-  console.log("| games | rolling win rate | eval win rate | entropy | elapsed |");
-  console.log("| ---: | ---: | ---: | ---: | ---: |");
-
   const rows: TrainProgress[] = [];
 
   await runTraining(
@@ -75,20 +70,30 @@ async function main(): Promise<void> {
     {
       shouldContinue: () => true,
       onProgress: (p) => {
-        if (CHECKPOINTS.has(p.games) || p.games === MAX_GAMES) {
-          if (rows.some((r) => r.games === p.games && r.evalWinRate === p.evalWinRate)) {
-            return;
-          }
+        if (!(CHECKPOINTS.has(p.games) || p.games === MAX_GAMES)) {
+          return;
+        }
+        const existing = rows.findIndex((r) => r.games === p.games);
+        if (existing >= 0) {
+          rows[existing] = p;
+        } else {
           rows.push(p);
-          const roll = p.rollingWinRate === null ? "—" : `${(p.rollingWinRate * 100).toFixed(1)}%`;
-          const ev = p.evalWinRate === null ? "—" : `${(p.evalWinRate * 100).toFixed(1)}%`;
-          const ent = p.entropy === null ? "—" : p.entropy.toFixed(3);
-          const elapsed = `${(p.elapsedMs / 1000).toFixed(1)}s`;
-          console.log(`| ${p.games} | ${roll} | ${ev} | ${ent} | ${elapsed} |`);
         }
       },
     },
   );
+
+  console.log(`## PPO vs Random (seed ${SEED}, maxGames ${MAX_GAMES})`);
+  console.log("");
+  console.log("| games | rolling win rate | eval win rate | entropy | elapsed |");
+  console.log("| ---: | ---: | ---: | ---: | ---: |");
+  for (const p of rows) {
+    const roll = p.rollingWinRate === null ? "—" : `${(p.rollingWinRate * 100).toFixed(1)}%`;
+    const ev = p.evalWinRate === null ? "—" : `${(p.evalWinRate * 100).toFixed(1)}%`;
+    const ent = p.entropy === null ? "—" : p.entropy.toFixed(3);
+    const elapsed = `${(p.elapsedMs / 1000).toFixed(1)}s`;
+    console.log(`| ${p.games} | ${roll} | ${ev} | ${ent} | ${elapsed} |`);
+  }
 
   const last = rows[rows.length - 1];
   if (!last || last.rollingWinRate === null || last.rollingWinRate < 0.6) {

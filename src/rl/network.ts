@@ -25,11 +25,12 @@ export function createActorCritic(hiddenSize = 128): ActorCritic {
 }
 
 export async function ensureTfCpu(): Promise<void> {
-  await tf.ready();
-  if (tf.getBackend() !== "cpu") {
-    await tf.setBackend("cpu");
-    await tf.ready();
+  // Register CPU before tf.ready() so the worker does not probe WebGL.
+  const ok = await tf.setBackend("cpu");
+  if (!ok) {
+    throw new Error("TensorFlow.js CPU backend failed to register");
   }
+  await tf.ready();
 }
 
 export function predictLogitsValue(
