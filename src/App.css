@@ -1,0 +1,138 @@
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 20px 48px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 650;
+}
+
+.lede {
+  margin: 0 0 22px;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.controls button {
+  border: 1px solid var(--line);
+  background: #262a36;
+  color: var(--fg);
+  padding: 8px 14px;
+  border-radius: 6px;
+}
+
+.controls button.primary {
+  background: var(--accent);
+  color: #1a1406;
+  border-color: var(--accent);
+  font-weight: 650;
+}
+
+.controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.metric .label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric .value {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+}
+
+.metric .value.good {
+  color: var(--ok);
+}
+
+.board-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(7, 36px);
+  gap: 6px;
+  justify-content: center;
+  background: #24324a;
+  padding: 10px;
+  border-radius: 8px;
+  width: fit-content;
+}
+
+.cell {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #0f1218;
+}
+
+.cell.p1 {
+  background: var(--p1);
+}
+
+.cell.p2 {
+  background: var(--p2);
+}
+
+.cell.last {
+  box-shadow: 0 0 0 2px #fff3;
+}
+
+.caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.error {
+  color: #f08a8a;
+  margin: 0;
+}
+
+.note {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
